@@ -39,12 +39,9 @@
     and then press program to use over bluetooth with a OEMSPA310 connectblue BT-serial 
     adapter 
     hardware for tranmist is copied from whereavr 
-    
-    
-*/
-
-/* 
+     
 Version history:
+20170102 (0.15.1) SQ9MDD clean up the code
 20150214 (0.15.0) SQ9MDD add watchdog
 20150201 (0.14.1) SQ5RWU Checking for CRC in received data before sending it to host
 20100602 (0.14) Kiss transmit added, increased buffer size changed uart speed to 19200 to match arduino bootloader, changed heartbeat off
@@ -54,56 +51,38 @@ Version history:
 20100401 (0.06) Last attempt with Fourier math.
 20100323 (0.01) First draft.
 */
-
+// testy optymalizacji
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
 
 // ==== defs
-#define WELCOME_MSG      "Arduino TNC v.0.15.0"
-#define MIN_PACKET_LEN   10
-#define PACKET_SIZE      200
-#define AX25_MARK        0
-#define AX25_SPACE       1
-#define MAX_SYNC_ERRS    5
-#define MIN_DCD     20
-#define T3TOP            1212
-//#define ADC_BIAS         128
+#define WELCOME_MSG           "Arduino TNC v.0.15.2"
+#define MIN_PACKET_LEN        10
+#define PACKET_SIZE           200
+#define AX25_MARK             0
+#define AX25_SPACE            1
+#define MAX_SYNC_ERRS         5
+#define MIN_DCD               20
+#define T3TOP                 1212
+
 #if not defined(F_CPU)
-#define F_CPU            16000000UL
+  #define F_CPU               16000000UL
 #else
-//perhaps #error here if F_CPU is wrong?
+  //perhaps #error here if F_CPU is wrong?
 #endif
-#define READY_TO_SEND    (UCSR0A & (1<<UDRE0))
-#define ARD_DUE          1
-//#define ARD_MEGA         1
+
+#define READY_TO_SEND         (UCSR0A & (1<<UDRE0))
 #define CHECK_CRC_BY_DEFAULT  1
-
-// Defines
-
-#define BIT_DELAY 206         // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
-#define TXDELAY 50            // Number of 6.7ms delay cycles (send flags)
-#define SPACE (55)      //gives us 2228hz
-#define MARK (103)      //gives us 1200.98hz close enough with 16mhz clock 
-
+#define BIT_DELAY 206                             // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
+#define TXDELAY 50                                // Number of 6.7ms delay cycles (send flags)
+#define SPACE (55)                                // gives us 2228hz
+#define MARK (103)                                // gives us 1200.98hz close enough with 16mhz clock 
 #define TRUE  (1)
 #define FALSE   (0)
-
-
-
-#ifdef ARD_DUE
+#define BUF_SIZE    (200)                         // Educated guess for a good buffer size
 #define SET_DDRB         (DDRB = 0x3F) 
 #define DCD_ON           (PORTB |=  0x01)
 #define DCD_OFF          (PORTB &= ~0x01)
-#define HB_ON            (PORTB |=  0x02)
-#define HB_OFF           (PORTB &= ~0x02)
-#endif
-
-/*#ifdef ARD_MEGA
-#define SET_DDRB         (DDRB = 0xC0)
-#define DCD_ON           (PORTB |=  0x80)
-#define DCD_OFF          (PORTB &= ~0x80)
-#define HB_ON            (PORTB |=  0x40)
-#define HB_OFF           (PORTB &= ~0x40)
-#endif*/
-
 
 // ==== includes
 #include "Arduino.h"
@@ -113,75 +92,55 @@ Version history:
 #include <string.h>
 #include <util/delay.h>
 #include <inttypes.h>
-#include <avr/wdt.h>  //watchdog
+#include <avr/wdt.h>                              // watchdog lib
 
 // ==== protos
-#ifdef ARD_DUE
 ISR(TIMER1_COMPA_vect) ;
-#endif
-
-#ifdef ARD_MEGA
-ISR(TIMER3_COMPA_vect) ;
-#endif
 
 void decode_ax25(void) ;
 void send_serial_str( const char * inputstr ) ;
 
-
 // ==== vars
-signed char     adcval ;                   // zero-biased ADC input
-                //last_phase_err;           
-        
-int16_t         mult_cb[7],                // circular buffer for adc*delay values
-                mult_sum,                  // sum of mult_cb values
-                bias_sum ;                 // sum of last 128 ADC readings
-        
-        
-unsigned char   rawadc,                    // value read directly from ADCH register
-    since_last_chg,            // samples since the last MARK/SPACE symbol change
-                phase_err,                 // symbol transition timing error, in samples
-                current_symbol,            // MARK or SPACE
-                last_symbol,               // MARK or SPACE from previous reading
-    last_symbol_inaframe,      // MARK or SPACE from one bit-duration ago
-                inaframe,                  // rec'd start-of-frame marker
-                bittimes,                  // bit durations that have elapsed
-                bitqlen,                   // number of rec'd bits in bitq
-                popbits,                   // number of bits to pop (drop) off the end
-                byteval,                   // rec'd byte, read from bitq
-                cb_pos,                    // position within the circular buffer
-                msg[PACKET_SIZE + 1],      // rec'd data
-                msg_pos,                   // bytes rec'd, next array element to fill
-                x,                         // misc counter
-                test,                      // temp variable
-                decode_state,              // section of rec'd data being parsed
-                bias_cnt,                  // number of ADC samples collected (toward goal of 128)
-                adc_bias,                  // center-value for ADC, self-adjusting
-                hb12,                      // heartbeat (1 or 0)
-        calc_crc = CHECK_CRC_BY_DEFAULT;                  // check crc before sending to host
-
-unsigned char   sync_err_cnt,              // number of sync errors in this frame (so far)
-    bit_timer,                 // countdown one bit duration
-    thesebits ;                // number of elapsed bit durations
-        
-signed char     adc_delay[6] ;             // delay line for adc readings
-        
-uint32_t        bitq ;                     // rec'd bits awaiting grouping into bytes
-        
-unsigned char   debug = 0 ;                // used while program is compiled in GCC on PC (probably broken)
+signed char     adcval ;                          // zero-biased ADC input
+int16_t         mult_cb[7],                       // circular buffer for adc*delay values
+                mult_sum,                         // sum of mult_cb values
+                bias_sum ;                        // sum of last 128 ADC readings       
+unsigned char   rawadc,                           // value read directly from ADCH register
+                since_last_chg,                   // samples since the last MARK/SPACE symbol change
+                phase_err,                        // symbol transition timing error, in samples
+                current_symbol,                   // MARK or SPACE
+                last_symbol,                      // MARK or SPACE from previous reading
+                last_symbol_inaframe,             // MARK or SPACE from one bit-duration ago
+                inaframe,                         // rec'd start-of-frame marker
+                bittimes,                         // bit durations that have elapsed
+                bitqlen,                          // number of rec'd bits in bitq
+                popbits,                          // number of bits to pop (drop) off the end
+                byteval,                          // rec'd byte, read from bitq
+                cb_pos,                           // position within the circular buffer
+                msg[PACKET_SIZE + 1],             // rec'd data
+                msg_pos,                          // bytes rec'd, next array element to fill
+                x,                                // misc counter
+                test,                             // temp variable
+                decode_state,                     // section of rec'd data being parsed
+                bias_cnt,                         // number of ADC samples collected (toward goal of 128)
+                adc_bias,                         // center-value for ADC, self-adjusting
+                calc_crc = CHECK_CRC_BY_DEFAULT;  // check crc before sending to host
+unsigned char   sync_err_cnt,                     // number of sync errors in this frame (so far)
+                bit_timer,                        // countdown one bit duration
+                thesebits ;                       // number of elapsed bit durations        
+signed char     adc_delay[6] ;                    // delay line for adc readings        
+uint32_t        bitq ;                            // rec'd bits awaiting grouping into bytes        
 
 static char sine[16] = {58,22,46,30,62,30,46,22,6,42,18,34,2,34,18,42};
-static unsigned char sine_index;    // Index for the D-to-A sequence
-static unsigned char  transmit;     // Keeps track of TX/RX state
-volatile unsigned char  txtone;           // Used in main.c SIGNAL(SIG_OVERFLOW2)
-volatile unsigned char maindelay;   // State of mainDelay function
+static unsigned char sine_index;                  // Index for the D-to-A sequence
+volatile unsigned char  transmit;                 // Keeps track of TX/RX state
+volatile unsigned char  txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
+volatile unsigned char maindelay;                 // State of mainDelay function
+static unsigned char inbuf[PACKET_SIZE + 1];      // USART input buffer array
+static unsigned char inhead;                      // USART input buffer head pointer
+static unsigned char intail;                      // USART input buffer tail pointer
 
-#define BUF_SIZE    (200)     // Educated guess for a good buffer size
-
-static unsigned char inbuf[PACKET_SIZE + 1];  // USART input buffer array
-static unsigned char inhead;        // USART input buffer head pointer
-static unsigned char intail;        // USART input buffer tail pointer
-
-void  Serial_Processes(void);
+void Serial_Processes(void);
 void MsgHandler(unsigned char data);
 void mainTransmit(void);
 void mainReceive(void);
@@ -191,118 +150,64 @@ void ax25sendFooter(void);
 void ax25crcBit(int lsb_int);
 
 void setup(void){
-//watchdog
-  wdt_enable(WDTO_8S);                      //reset after one second, if no "pat the dog" received 
-  
-    // hardware USART0 (MEGA or Due)
-    // timer value of 19.2kbps serial output to match bootloader
-    UBRR0H = 0 ;
+    wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received 
+    UBRR0H = 0 ;                                  // timer value of 19.2kbps serial output to match bootloader
     UBRR0L = 103 ;
     UCSR0A |= (1<<U2X0) ;
     UCSR0B |= (1<<TXEN0) | (1<<RXEN0) ;
     UCSR0C |= (1<<UCSZ01) | (1<<UCSZ00) ;
-    
-    UCSR0B |= (1<<RXCIE0); //enable rx interrupt
-     
-    // ADC (MEGA or Due)
-    ADMUX   = (1<<REFS0) ;                    // channel0, ref to external input (Aref)
-    ADMUX  |= (1<<ADLAR) ;              // left-justified (only need 8 bits)
-    ADCSRA  = (1<<ADPS2) ;              // pre-scale 16
-    ADCSRA |= (1<<ADATE) ;              // auto-trigger (free-run)
-    ADCSRB  = 0x00 ;                    // free-running
-    DIDR0  |= (1<<ADC0D) ;              // disable digital driver on ADC0 
-    ADCSRA |= (1<<ADEN) ;               // enable ADC
-    ADCSRA |= (1<<ADSC) ;               // trigger first conversion  
+    UCSR0B |= (1<<RXCIE0);                        // enable rx interrupt
+    ADMUX   = (1<<REFS0) ;                        // channel0, ref to external input (Aref)
+    ADMUX  |= (1<<ADLAR) ;                        // left-justified (only need 8 bits)
+    ADCSRA  = (1<<ADPS2) ;                        // pre-scale 16
+    ADCSRA |= (1<<ADATE) ;                        // auto-trigger (free-run)
+    ADCSRB  = 0x00 ;                              // free-running
+    DIDR0  |= (1<<ADC0D) ;                        // disable digital driver on ADC0 
+    ADCSRA |= (1<<ADEN) ;                         // enable ADC
+    ADCSRA |= (1<<ADSC) ;                         // trigger first conversion  
   
     // use 16-bit timer to check the ADC at 13200 Hz. 
     // this is 11x the 1200Hz MARK freq, and 6x the 2200Hz SPACE freq.
-
-#ifdef ARD_MEGA
-    // use Timer3 as sample clock on Arduino Mega (ATmega1280)
-    // Timer1 conflicted with Arduino "delay()" function
-    TCCR3A = 0x00 ;
-    TCCR3B = (1<<WGM32) | (1<<CS30) ;
-    TCCR3C = 0x00 ; 
-    OCR3A = T3TOP ;
-    TIMSK3 = (1<<OCIE3A) ;                // enable compare match interrupt
-#endif
-
-#ifdef ARD_DUE
     // use Timer1 on Arduino Duemilanove (ATmega328P)
     TCCR1A = 0x00 ;
     TCCR1B = (1<<WGM12) | (1<<CS10) ;
     TCCR1C = 0x00 ;
-    OCR1A = T3TOP ;  //set timer trigger frequency 
+    OCR1A = T3TOP ;                               //set timer trigger frequency 
     TIMSK1 = (1<<OCIE1A) ;
-    
-    
-    // use timer2 for a symbol (bit) timer 
-      TCCR2A = 0;
-  //  Initialize the 8-bit Timer2 to clock at 1200hz
-  TCCR2B = 0x04;              // Timer2 clock prescale of 
-  // enable overflow interrupt(do this later....
-  //TIMSK2 = 1<<TOIE2; //TODO
-  // enable overflow interrupt flag to trigger on overflow
-  TIFR2 = (1<<TOV2); 
-#endif
-
-    // use blinky on "pin 13" as DCD light, use "pin 12" as sample clock heartbeat
-    // the port/bit designation for these Arduino pins varies with the chip used
-    // see the chip-specific DEFINEs above for details
+    TCCR2A = 0;                                   // use timer2 for a symbol (bit) timer 
+                                                  // Initialize the 8-bit Timer2 to clock at 1200hz
+    TCCR2B = 0x04;                                // Timer2 clock prescale of  
+    TIFR2 = (1<<TOV2);                            // enable overflow interrupt flag to trigger on overflow 
+                                                  // use blinky on "pin 13" as DCD light, use "pin 12" as sample clock heartbeat
+                                                  // the port/bit designation for these Arduino pins varies with the chip used
+                                                  // see the chip-specific DEFINEs above for details
     SET_DDRB ;
-    
-    //set a debug pin 
-    DDRD = 0x04;
-
-    // pause to settle
- //   _delay_ms( 1000 ) ;
-    _delay_ms( 1000 ) ;
-
-    // announce ourselves
-    // TODO: make this a status packet? :) 
-    send_serial_str( WELCOME_MSG ) ;
-    send_serial_str( "\n\n\n" ) ;    
-
-    // enable interrupts
-    sei() ; 
-    
-    // pause again for ADC bias to settle
-    _delay_ms( 1000 ) ;
-
+    PORTB &= 0x00;                                // set  
+    //DDRD = 0x04;                                // set a debug pin //<--test
+    _delay_ms( 1000 ) ;                           // pause to settle
+    send_serial_str( WELCOME_MSG ) ;              // announce ourselves
+    send_serial_str( "\n\n\n" ) ;     
+    sei() ;                                       // enable interrupts  
+    _delay_ms( 1000 ) ;                           // pause again for ADC bias to settle
 }
-
 
 void loop (void)
 {
-    Serial_Processes();
-  //watchdog
-  wdt_reset();        // give me another second to do stuff (pat the dog)    
+  Serial_Processes();
+  wdt_reset();                                    // watchdog give me another second to do stuff (pat the dog)    
 }
 
-#ifdef ARD_MEGA
-ISR(TIMER3_COMPA_vect)
-#endif
-
-#ifdef ARD_DUE
 ISR(TIMER1_COMPA_vect)
-#endif
-
-{
-  
-  if(transmit) //if transmitting output our sine tone
+{  
+  if(transmit)                                    // if transmitting output our sine tone
   {
-    ++sine_index;       // Increment index
-    sine_index &= 15;       // And wrap to a max of 15    
-    PORTB = sine[sine_index];     // Load next D-to-A sinewave value
-    OCR1A = txtone;       // Preload counter based on freq.
+    ++sine_index;                                 // Increment index
+    sine_index &= 15;                             // And wrap to a max of 15    
+    PORTB = sine[sine_index];                     // Load next D-to-A sinewave value
+    OCR1A = txtone;                               // Preload counter based on freq.
   }
   else
-  {
-      //PORTB ^= 0x01;
-      // heartbeat on "pin 12" - see defines for marcos
-      //if ( hb12 ) { hb12 = 0 ; HB_OFF ; }
-      //else        { hb12 = 1 ; HB_ON ; }
-    
+  {   
       // calculate ADC bias (average of last 128 ADC samples)
       // this input is decoulped from the receiver with a capacitor, 
       // and is re-biased to half of the Arduino regulated +3.3V bus
@@ -323,9 +228,8 @@ ISR(TIMER1_COMPA_vect)
      
       //=========================================================
       // Seguine math
-      //    for details, see http://www.cypress.com/?docID=2328
+      // for details, see http://www.cypress.com/?docID=2328
       //=========================================================
-  
   
       adcval = rawadc - adc_bias ;
     
@@ -355,13 +259,6 @@ ISR(TIMER1_COMPA_vect)
       if ( ++since_last_chg > 200 ) { since_last_chg = 200 ; }
       thesebits = 0 ;
     
-      if ( debug ) 
-      { /*
-          printf( "%7d (%1d): ADC %4d D %4d = %7d Sum %9d CS %1d SLC %d\n" ,
-    sampnum, inaframe, adcval, adc_delay[5], mult_cb[cb_pos], 
-    mult_sum, current_symbol, since_last_chg ) ;
-      */ }
-    
       // rotate the delay
       for ( x=5 ; x>=1 ; x-- ) 
       {
@@ -389,12 +286,6 @@ ISR(TIMER1_COMPA_vect)
       
     if ( current_symbol != last_symbol ) 
     {
-        if ( debug ) 
-        { /*
-            printf( "%d (%d): SLC %d BT %d\n", sampnum, inaframe, 
-        since_last_chg, bit_timer ) ; 
-        */  }
-      
         // save the new symbol
         last_symbol = current_symbol ;
         // reset counter
@@ -416,67 +307,40 @@ ISR(TIMER1_COMPA_vect)
         
         if ( ( bit_timer == 7 ) || ( bit_timer == 8 ) )
         {
-            // other station is slow or we're fast. nudge timer back.
-      bit_timer -= 1 ;
-      if ( debug ) 
-      { /*
-          printf( "%d (%d): Nudging timer down one.\n" , 
-        sampnum, inaframe ) ;
-      */ }    
+          // other station is slow or we're fast. nudge timer back.
+          bit_timer -= 1 ;   
         }
         else if ( ( bit_timer == 0 ) || ( bit_timer == 1 ) )
         {
-            // they're fast or we're slow - nudge timer forward
-      bit_timer += 1 ;
-      if ( debug )
-      { /*
-          printf( "%d (%d): Nudging timer up one.\n" , 
-            sampnum, inaframe ) ;
-      */ }    
+          // they're fast or we're slow - nudge timer forward
+          bit_timer += 1 ;   
         } 
         else if ( ( bit_timer == 9 ) || ( bit_timer == 10 ) )
         {
             // too much error
-      if ( ++sync_err_cnt > MAX_SYNC_ERRS ) 
-      {
-          if ( debug ) 
-          { /*
-              printf("%d: Phase errs > %d! Cancel frame & clear buffers!\n" , 
-            sampnum, MAX_SYNC_ERRS) ;
-          */  }   
-          sync_err_cnt = 0 ;
-          msg_pos = 0 ;
-          inaframe = 0 ;
-          bitq = 0 ;
-          bitqlen = 0 ;
-          bit_timer = 0 ;
-          bittimes = 0 ;
-          // turn off DCD light
-          DCD_OFF ;
-          return ;
-      }
-      else
-      {
-          if ( debug ) 
-          {  /*
-              printf( "%d: Added a sync error - up to %d.\n" ,
-          sampnum, sync_err_cnt ) ;
-          */ }    
-      }
+            if ( ++sync_err_cnt > MAX_SYNC_ERRS ) 
+            {   
+              sync_err_cnt = 0 ;
+              msg_pos = 0 ;
+              inaframe = 0 ;
+              bitq = 0 ;
+              bitqlen = 0 ;
+              bit_timer = 0 ;
+              bittimes = 0 ;
+              // turn off DCD light
+              DCD_OFF ;
+              return ;
+            }
         } // end bit_timer cases
     } // end if symbol change
       
-          //=============================
+    //=============================
     // bit recovery within a frame
     //=============================
       
     if ( bit_timer == 0 )
     {
-              // time to check for new bits
-        if ( debug ) 
-        { /* printf( "%d (%d): Bit timer: symbol is %d\n", 
-        sampnum, inaframe, current_symbol ) ; */ }
-          
+        // time to check for new bits
         // reset timer for the next bit
         bit_timer = 11 ;
         // another bit time has elapsed
@@ -522,14 +386,7 @@ ISR(TIMER1_COMPA_vect)
     if ( current_symbol == last_symbol ) 
     { return ; }
     
-          // symbol change 
-  
-    if ( debug ) 
-    { /*
-        printf( "%d (%d): SLC %d PE %d\n", sampnum, inaframe, 
-                since_last_chg, phase_err ) ; 
-    */ }
-    
+    // symbol change     
     // save the new symbol, reset counter
     last_symbol = current_symbol ;
     since_last_chg = 0 ;
@@ -635,7 +492,6 @@ ISR(TIMER1_COMPA_vect)
       default: 
               // less than a full bit, or more than seven have elapsed
               // clear buffers
-              if ( debug ) { /* printf( "%d: Bitstuff overrun!\n", sampnum ) ; */ }
               msg_pos = 0 ;
               inaframe = 0 ;
               bitq = 0 ;
@@ -671,7 +527,6 @@ ISR(TIMER1_COMPA_vect)
               if ( inaframe == 0 ) 
               {
                   // marks start of a new frame
-                  if ( debug ) { /*printf( "%d: HDLC starter found!\n" , sampnum ) ;*/ }
                   inaframe = 1 ;
                   last_symbol_inaframe = current_symbol ;
       sync_err_cnt = 0 ;
@@ -686,18 +541,13 @@ ISR(TIMER1_COMPA_vect)
                   // We are already in a frame, but have not rec'd any/enough data yet.
                   // AX.25 preamble is sometimes a series of HDLCs in a row, so 
                   // let's assume that's what this is, and just drop this byte.
-      if ( debug ) 
-      { /*printf( "%d: Another HDLC - ignoring.\n" , sampnum ) ;*/ }
                   popbits = 8 ;
               }    
              
               else     
               {
                   // in a frame, and have some data, so this HDLC is probably 
-                  // a frame-ender (and maybe also a starter)
-      if ( debug ) 
-                  { /*printf( "%d: msg_pos = %d\n" , sampnum, msg_pos ) ; */}
-          
+                  // a frame-ender (and maybe also a starter)         
                   if ( msg_pos > 0 )
                   {   /*
                       printf( "Message was:" ) ;
@@ -725,11 +575,7 @@ ISR(TIMER1_COMPA_vect)
   
           else if ( inaframe == 1 ) 
           {
-              // not an HDLC frame marker, but =is= a data character
-              if ( debug ) 
-              { /* printf( "%d (%d): Add byte %02X (len is now %d)\n" , 
-           sampnum, inaframe, byteval, msg_pos ) ; */ }
-  
+              // not an HDLC frame marker, but =is= a data character 
               // add it to the incoming message
               msg[ msg_pos ] = byteval ;
               msg_pos++ ;
@@ -760,10 +606,6 @@ ISR(TIMER1_COMPA_vect)
           bitqlen -= popbits ;
   
       } // end while bitqueue >= 8
-  
-      // debug: check timing
-      //end_time = TCNT3 ;
-  
       sei() ;
   }      
       return ;
@@ -777,43 +619,20 @@ ISR(TIMER1_COMPA_vect)
 SIGNAL(TIMER2_OVF_vect)
 {
   //PORTB ^= 0x3C;//sine[sine_index];     // Load next D-to-A sinewave value
-  maindelay = FALSE;          // Clear condition holding up mainDelay
-  TCNT2 = 0;                // Make long as possible delay
-  
-  //test to see if we toggle fast enough....
-  //TCNT2 = 255 - BIT_DELAY;
-  //txtone = (txtone == MARK)? SPACE : MARK;
-  
+  maindelay = FALSE;                      // Clear condition holding up mainDelay
+  TCNT2 = 0;                              // Make long as possible delay
 }
 
 /******************************************************************************/
 SIGNAL(USART_RX_vect)
-/*******************************************************************************
-* ABSTRACT: Called by the receive ISR (interrupt). Saves the next serial
-*       byte to the head of the RX buffer.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
   if (++inhead == BUF_SIZE) inhead = 0; // Advance and wrap buffer pointer
-  inbuf[inhead] = UDR0;             // Transfer the byte to the input buffer
-        
+  inbuf[inhead] = UDR0;             // Transfer the byte to the input buffer        
   return;
-
 }   // End SIGNAL(SIG_UART_RECV)
 
 /******************************************************************************/
 inline void Serial_Processes(void)
-/*******************************************************************************
-* ABSTRACT: Called by main.c during idle time. Processes any waiting serial
-*       characters coming in or going out both serial ports.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
   PORTD ^= 0x04;
   if (intail != inhead)         // If there are incoming bytes pending
@@ -821,9 +640,7 @@ inline void Serial_Processes(void)
     if (++intail == BUF_SIZE) intail = 0; // Advance and wrap pointer
     MsgHandler(inbuf[intail]);    // And pass it to a handler
   }
-
   return;
-
 }   // End Serial_Processes(void)
 
 static unsigned char prevdata; 
@@ -836,7 +653,6 @@ static unsigned char prevdata;
 *******************************************************************************/
 inline void MsgHandler(unsigned char data)
 {
-  
    if (0xC0 == prevdata)
    {
      if ((0x00 == data) )
@@ -864,14 +680,11 @@ inline void MsgHandler(unsigned char data)
         }
    }  
    else if (TRUE == transmit)ax25sendByte(data); // if we are transmitting then just send the data
-  
-  prevdata = data; // copy the data for our state machine 
+   prevdata = data; // copy the data for our state machine 
 }
-
 // Global variables
 
 static unsigned short crc;
-
 
 void decode_ax25 (void)
 {
@@ -879,8 +692,6 @@ void decode_ax25 (void)
   
     x = 0 ;
     decode_state = 0 ;     // 0=just starting, 1=header, 2=got 0x03, 3=got 0xF0 (payload data)
-
-    //debug( "Decode routine - rec'd " . length($pkt) . " bytes." ) ;
     if (calc_crc){
       crc = 0xFFFF;
       //(ax25crcBit(bit_zero));
@@ -977,60 +788,37 @@ void send_serial_str(const char * inputstr)
 
 /******************************************************************************/
 void mainTransmit(void)
-/*******************************************************************************
-* ABSTRACT: Do all the setup to transmit.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
   //UCSR0B &= ~((1<<RXCIE0)|(1<<TXCIE0)); // Disable the serial interrupts
   //TCCR2B = 0x02;                // Timer2 clock prescale of 8
-        sine_index = 0;  //set our transmitter so it always starts the sine generator from 0 
-        txtone = MARK;  //set up the bits so we always start with the same tone for the header (otherwise it alternates) 
+  sine_index = 0;  //set our transmitter so it always starts the sine generator from 0 
+  txtone = MARK;  //set up the bits so we always start with the same tone for the header (otherwise it alternates) 
   // enable overflow interrupt
   TIMSK2 |= (1<<TOIE2); // enable timer 2
-        TCCR1B = (1<<WGM12) | (2<<CS10) ; //setup timer 1
-        TCNT2 = BIT_DELAY;    //setup timer two to trigger at 1200 times a second 
+  TCCR1B = (1<<WGM12) | (2<<CS10) ; //setup timer 1
+  TCNT2 = BIT_DELAY;    //setup timer two to trigger at 1200 times a second 
   transmit = TRUE;  // Enable the transmitter
   ax25sendHeader(); // Send APRS header
   return;
-
 }   // End mainTransmit(void)
 
 
 /******************************************************************************/
 void mainReceive(void)
-/*******************************************************************************
-* ABSTRACT: Do all the setup to receive or wait.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
-  ax25sendFooter();   // Send APRS footer
-  transmit = FALSE;   // Disable transmitter
-  PORTB &= 0x00;      // Make sure the transmitter is disabled by turning off transmit pin was 0x3D to turn off ptt
-        TCCR1B = (1<<WGM12) | (1<<CS10) ;
-        TIMSK2 &= ~(1<<TOIE2); //disable timer two interrupt 
-        OCR1A = T3TOP ;      //set timer 1 back to triggering at the recieve sample frequency 
-        sine_index = 0;      //set the sine back to 0 (redundant) 
+  ax25sendFooter();                         // Send APRS footer
+  transmit = FALSE;                         // Disable transmitter
+  PORTB &= 0x00;                            // Make sure the transmitter is disabled by turning off transmit pin was 0x3D to turn off ptt
+  TCCR1B = (1<<WGM12) | (1<<CS10) ;
+  TIMSK2 &= ~(1<<TOIE2);                    //disable timer two interrupt 
+  OCR1A = T3TOP ;                           //set timer 1 back to triggering at the recieve sample frequency 
+  sine_index = 0;                           //set the sine back to 0 (redundant) 
   return;
-
 }   // End mainReceive(void)
 
 
 /******************************************************************************/
 void mainDelay(unsigned char timeout)
-/*******************************************************************************
-* ABSTRACT: This function sets "maindelay", programs the desired delay,
-*     
-*
-* INPUT:    None
-* OUT:  None
-*/
 {
   maindelay = TRUE;         // Set the condition variable
   TCNT2 = 255 - timeout;          // Set desired delay
@@ -1038,23 +826,13 @@ void mainDelay(unsigned char timeout)
   {
             //asm("nop");//do something TODO process serial data here... 
   }
-        //TCNT2 = (255 - BIT_DELAY);
-        
+        //TCNT2 = (255 - BIT_DELAY);        
   return;
-
 }   // End mainDelay(unsigned int timeout)
 
 
 /******************************************************************************/
 void ax25sendHeader(void)
-/*******************************************************************************
-* ABSTRACT: This function keys the transmitter, sends the source and
-*       destination address, and gets ready to send the actual data.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
   static unsigned char  loop_delay;
   crc = 0xFFFF;             // Initialize the crc register
@@ -1069,14 +847,6 @@ void ax25sendHeader(void)
 
 /******************************************************************************/
 void ax25sendFooter(void)
-/*******************************************************************************
-* ABSTRACT: This function closes out the packet with the check-sum and a
-*       final flag.
-*
-* INPUT:    None
-* OUTPUT: None
-* RETURN: None
-*/
 {
   static unsigned char  crchi;
   crchi = (crc >> 8)^0xFF;
@@ -1087,25 +857,15 @@ void ax25sendFooter(void)
 }   // End ax25sendFooter(void)
 /******************************************************************************/
 void ax25sendByte(unsigned char txbyte)
-/*******************************************************************************
-* ABSTRACT: This function sends one byte by toggling the "tone" variable.
-*
-* INPUT:    txbyte  The byte to transmit
-* OUTPUT: None
-* RETURN: None
-*/
 {
   static char mloop;
   static char bitbyte;
   static int  bit_zero;
   static unsigned char  sequential_ones;
-
   bitbyte = txbyte;             // Bitbyte will be rotated through
-
   for (mloop = 0 ; mloop < 8 ; mloop++) // Loop for eight bits in the byte
   {
     bit_zero = bitbyte & 0x01;      // Set aside the least significant bit
-
     if (txbyte == 0x7E)         // Is the transmit character a flag?
     {
       sequential_ones = 0;        // it is immune from sequential 1's
@@ -1114,7 +874,6 @@ void ax25sendByte(unsigned char txbyte)
     {
       (ax25crcBit(bit_zero));     // So modify the checksum
     }
-
     if (!(bit_zero))            // Is the least significant bit low?
     {
       sequential_ones = 0;        // Clear the number of ones we have sent
@@ -1129,9 +888,7 @@ void ax25sendByte(unsigned char txbyte)
         txtone = (txtone == MARK)? SPACE : MARK; // Toggle transmit tone
         sequential_ones = 0;      // Clear the number of ones we have sent
       }
-
     }
-
     bitbyte >>= 1;              // Shift the reference byte one bit right
     mainDelay(BIT_DELAY);       // Pause for the bit to be sent
   }
@@ -1139,26 +896,16 @@ void ax25sendByte(unsigned char txbyte)
 }   // End ax25sendByte(unsigned char txbyte)
 /*******************************************************************************/
 void ax25crcBit(int lsb_int)
-/*******************************************************************************
-* ABSTRACT: This function takes the latest transmit bit and modifies the crc.
-*
-* INPUT:    lsb_int An integer with its least significant bit set of cleared
-* OUTPUT: None
-* RETURN: None
-*/
 {
   static unsigned short xor_int;
-
   xor_int = crc ^ lsb_int;        // XOR lsb of CRC with the latest bit
-  crc >>= 1;            // Shift 16-bit CRC one bit to the right
-
-  if (xor_int & 0x0001)         // If XOR result from above has lsb set
+  crc >>= 1;                      // Shift 16-bit CRC one bit to the right
+  if (xor_int & 0x0001)           // If XOR result from above has lsb set
   {
-    crc ^= 0x8408;          // Shift 16-bit CRC one bit to the right
+    crc ^= 0x8408;                // Shift 16-bit CRC one bit to the right
   }
-
   return;
 }   // End ax25crcBit(int lsb_int)
-
-
 // end of file
+
+#pragma GCC pop_options
