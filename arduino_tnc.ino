@@ -88,6 +88,7 @@ int8_t adcval;                          // zero-biased ADC input
 int16_t mult_cb[7],                       // circular buffer for adc*delay values
         mult_sum,                         // sum of mult_cb values
         bias_sum;                        // sum of last 128 ADC readings
+uint16_t msg_pos;                        // bytes rec'd, next array element to fill
 uint8_t rawadc,                           // value read directly from ADCH register
         since_last_chg,                   // samples since the last MARK/SPACE symbol change
         phase_err,                        // symbol transition timing error, in samples
@@ -101,8 +102,6 @@ uint8_t rawadc,                           // value read directly from ADCH regis
         byteval,                          // rec'd byte, read from bitq
         cb_pos,                           // position within the circular buffer
         msg[PACKET_SIZE + 1],             // rec'd data
-        msg_pos,                          // bytes rec'd, next array element to fill
-        x,                                // misc counter
         test,                             // temp variable
         decode_state,                     // section of rec'd data being parsed
         bias_cnt,                         // number of ADC samples collected (toward goal of 128)
@@ -118,8 +117,8 @@ static uint16_t crc;
 static uint8_t sine[16] = {58, 22, 46, 30, 62, 30, 46, 22, 6, 42, 18, 34, 2, 34, 18, 42};
 static uint8_t sine_index;                  // Index for the D-to-A sequence
 volatile uint8_t inbuf[PACKET_SIZE + 1];      // USART input buffer array
-volatile uint8_t inhead;                      // USART input buffer head pointer
-volatile uint8_t intail;                      // USART input buffer tail pointer
+volatile uint16_t inhead;                      // USART input buffer head pointer
+volatile uint16_t intail;                      // USART input buffer tail pointer
 static uint8_t prevdata;
 volatile uint8_t transmit;                 // Keeps track of TX/RX state
 volatile uint8_t txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
@@ -224,6 +223,7 @@ ISR(TIMER1_COMPA_vect) {
         if (++since_last_chg > 200) { since_last_chg = 200; }
         thesebits = 0;
         // rotate the delay
+        uint8_t x;
         for (x = 5; x >= 1; x--) {
             adc_delay[x] = adc_delay[x - 1];
         }
@@ -585,7 +585,7 @@ inline void MsgHandler(uint8_t data) {
 
 void decode_ax25(void) {
     // Take the data in the msg array, and send it out the serial port.
-    x = 0;
+    uint16_t x = 0;
     decode_state = 0;     // 0=just starting, 1=header, 2=got 0x03, 3=got 0xF0 (payload data)
     if (calc_crc) {
         crc = 0xFFFF;
@@ -668,6 +668,7 @@ void decode_ax25(void) {
 }
 
 void send_serial_str(const char *inputstr) {
+    uint16_t x;
     for (x = 0; x < strlen(inputstr); x++) {
         if (inputstr[x] == 0) {
             return;
