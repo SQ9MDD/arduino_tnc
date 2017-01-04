@@ -8,7 +8,6 @@
     is also small, fast, heavily commented, and might even decode a packet occasionally.
 
     This software is based heavily on the (far better) works of:
-    
       Bob Bruninga, WB4APR
       Dennis Seguine
       Scott Miller, N1VG
@@ -17,28 +16,17 @@
       Thomas Sailer, HB9JNX/AE4WA
       
     Anyone wanting to use this code is strongly encouraged to:
-    
       1. Reconsider.
       2. Buy a pre-made device from "argentdata.com" or "tncx.com" instead.
       3. At the very least, download the datasheet for the ATmega328P and/or ATmega1280.
       4. Bookmark "http://www.nongnu.org/avr-libc/".
     
-    If you do find anything useful about this code, please let me know, at:
-   
-    Kilo India Four Mike Charlie Whiskey at-sign Golf Mike Alpha India Lima Dot Com.
-    
-    
+    If you do find anything useful about this code, please let me know, at:   
+    Kilo India Four Mike Charlie Whiskey at-sign Golf Mike Alpha India Lima Dot Com.    
     Robert Marshall, KI4MCW    
-    
-    
+        
     Transmit code based on  Whereavr http://www.garydion.com/projects/whereavr/
     added by Kieran Levin, KC9BZY kieranlevin.com kilo india ralf alpha Mike 9 at-sign yahoo dot com
-    to use with programming over bluetooth I prefer the ladyada no wait booloader 
-    http://www.ladyada.net/library/arduino/bootloader.html
-    you can just set the serial port and arduino board to BT, hit reset on the board
-    and then press program to use over bluetooth with a OEMSPA310 connectblue BT-serial 
-    adapter 
-    hardware for tranmist is copied from whereavr 
      
 Version history:
 20170102 (0.15.2) SQ9MDD clean up the code, reformating comments, delete not used variables, add compiler options, thanx to Luca SQ5RWU,
@@ -52,12 +40,13 @@ Version history:
 20100401 (0.06) Last attempt with Fourier math.
 20100323 (0.01) First draft.
 */
+
 // compiler options
 #pragma GCC push_options
 #pragma GCC optimize ("O0")
 
 // ==== defs
-#define WELCOME_MSG           "Arduino TNC v.0.15.2"
+#define WELCOME_MSG           "Arduino TNC v.0.15.3"
 #define MIN_PACKET_LEN        10
 #define PACKET_SIZE           200
 #define AX25_MARK             0
@@ -67,7 +56,7 @@ Version history:
 #define T3TOP                 1212
 #define F_CPU                 16000000UL
 #define READY_TO_SEND         (UCSR0A & (1<<UDRE0))
-#define CHECK_CRC_BY_DEFAULT  1
+#define CHECK_CRC_BY_DEFAULT  1                   // enable frame check sequence
 #define BIT_DELAY             205                 // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
 #define TXDELAY               50                  // Number of 6.7ms delay cycles (send flags)
 #define SPACE                 (55)                // gives us 2228hz
@@ -83,7 +72,7 @@ Version history:
 #include "Arduino.h"
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/sleep.h>
+//#include <avr/sleep.h>
 #include <string.h>
 #include <util/delay.h>
 #include <inttypes.h>
@@ -92,10 +81,7 @@ Version history:
 // ==== protos
 ISR(TIMER1_COMPA_vect) ;
 
-void decode_ax25(void) ;
-void send_serial_str( const char * inputstr ) ;
-
-// ==== vars
+// variables
 signed char     adcval ;                          // zero-biased ADC input
 int16_t         mult_cb[7],                       // circular buffer for adc*delay values
                 mult_sum,                         // sum of mult_cb values
@@ -126,23 +112,16 @@ unsigned char   sync_err_cnt,                     // number of sync errors in th
 signed char     adc_delay[6] ;                    // delay line for adc readings        
 uint32_t        bitq ;                            // rec'd bits awaiting grouping into bytes        
 
+static unsigned short crc;
 static char sine[16] = {58,22,46,30,62,30,46,22,6,42,18,34,2,34,18,42};
 static unsigned char sine_index;                  // Index for the D-to-A sequence
-volatile unsigned char  transmit;                 // Keeps track of TX/RX state
-volatile unsigned char  txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
-volatile unsigned char maindelay;                 // State of mainDelay function
 static unsigned char inbuf[PACKET_SIZE + 1];      // USART input buffer array
 static unsigned char inhead;                      // USART input buffer head pointer
 static unsigned char intail;                      // USART input buffer tail pointer
-
-void Serial_Processes(void);
-void MsgHandler(unsigned char data);
-void mainTransmit(void);
-void mainReceive(void);
-void ax25sendByte(unsigned char txbyte);
-void ax25sendHeader(void);
-void ax25sendFooter(void);
-void ax25crcBit(int lsb_int);
+static unsigned char prevdata; 
+volatile unsigned char  transmit;                 // Keeps track of TX/RX state
+volatile unsigned char  txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
+volatile unsigned char maindelay;                 // State of mainDelay function
 
 void setup(void){
     wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received 
@@ -163,7 +142,7 @@ void setup(void){
   
     // use 16-bit timer to check the ADC at 13200 Hz. 
     // this is 11x the 1200Hz MARK freq, and 6x the 2200Hz SPACE freq.
-    // use Timer1 on Arduino Duemilanove (ATmega328P)
+    // use Timer1 on Arduino Nano (ATmega328P)
     TCCR1A = 0x00 ;
     TCCR1B = (1<<WGM12) | (1<<CS10) ;
     TCCR1C = 0x00 ;
@@ -178,7 +157,6 @@ void setup(void){
                                                   // see the chip-specific DEFINEs above for details
     SET_DDRB ;
     PORTB &= 0x00;                                // set  
-    //DDRD = 0x04;                                // set a debug pin //<--test
     _delay_ms( 1000 ) ;                           // pause to settle
     send_serial_str( WELCOME_MSG ) ;              // announce ourselves
     send_serial_str( "\n\n\n" ) ;     
@@ -192,6 +170,7 @@ void loop (void)
   wdt_reset();                                    // watchdog give me another second to do stuff (pat the dog)    
 }
 
+// functions
 ISR(TIMER1_COMPA_vect)
 {  
   if(transmit)                                    // if transmitting output our sine tone
@@ -286,8 +265,7 @@ ISR(TIMER1_COMPA_vect)
         // tolerate some drift and still keep sync.
         // By those rules, an SLC of 4 is perfect, 2 through 6 are fine and  
         // need no adjustment, 7,8 and 0,1 need adjustment, 9,10 are timing 
-        // errors - we can accept a certain number of those before aborting.
-        
+        // errors - we can accept a certain number of those before aborting.        
         if ( ( bit_timer == 7 ) || ( bit_timer == 8 ) )
         {
           // other station is slow or we're fast. nudge timer back.
@@ -315,8 +293,7 @@ ISR(TIMER1_COMPA_vect)
             return ;
           }
         } // end bit_timer cases
-      } // end if symbol change
-      
+      } // end if symbol change      
       //=============================
       // bit recovery within a frame
       //============================= 
@@ -342,16 +319,14 @@ ISR(TIMER1_COMPA_vect)
     {
       //=================
       // not in a frame
-      //=================
-      
+      //=================      
       // housekeeping
       // phase_err = since_last_change MOD 11, except that the "%" operator is =very slow=
       phase_err = since_last_chg ;
       while ( phase_err >= 11 ) 
       { 
         phase_err -= 11 ; 
-      }
-    
+      }    
       // elapsed bittimes = round (since_last_chg / 11)
       bittimes = 0 ;
       test = since_last_chg + 5 ;
@@ -359,8 +334,7 @@ ISR(TIMER1_COMPA_vect)
       { 
         test -= 11 ; bittimes++ ; 
       }
-      thesebits = 0 ;
-    
+      thesebits = 0 ;    
       //====================================
       // clock recovery NOT within a frame
       //====================================      
@@ -369,13 +343,11 @@ ISR(TIMER1_COMPA_vect)
       if ( current_symbol == last_symbol ) 
       { 
         return ; 
-      }
-    
+      }    
       // symbol change     
       // save the new symbol, reset counter
       last_symbol = current_symbol ;
-      since_last_chg = 0 ;
-    
+      since_last_chg = 0 ;    
       // check bit sync
       if ( ( phase_err >= 4 ) && ( phase_err <= 7 ) )
       {
@@ -384,13 +356,10 @@ ISR(TIMER1_COMPA_vect)
         bitqlen = 0 ;
         // turn off the DCD light
         DCD_OFF ;
-      } 
-      
+      }       
       // save these bits
-      thesebits = bittimes + 1 ;
-          
+      thesebits = bittimes + 1 ;          
     } // end else ( = not inaframe)
-
     //========================================
     //   bit recovery, in or out of a frame
     //========================================
@@ -401,8 +370,7 @@ ISR(TIMER1_COMPA_vect)
     else 
     { 
       thesebits-- ;                                    // remove the "ready" flag
-    }  
-    
+    }      
     // determine incoming bit values based on how many bit times have elapsed.
     // whatever the count was, the last bit involved a symbol change, so must be zero.
     // all other elapsed bits must be ones. AX.25 is transmitted LSB first, so in
@@ -413,8 +381,7 @@ ISR(TIMER1_COMPA_vect)
     // shifting them to the left as required prior to the OR operation, and (b) update
     // the number of bits stored in the queue. with zero bits, there's nothing to
     // OR into place, so they are taken care of when we update the queue length, and 
-    // when we shift the queue to the right as bytes are popped off the end later on.
-    
+    // when we shift the queue to the right as bytes are popped off the end later on.    
     switch ( thesebits )
     {
     case 1: break ;    // no ones to add ------> binary       "0"
@@ -487,8 +454,7 @@ ISR(TIMER1_COMPA_vect)
             DCD_OFF ;
             break ;
                    
-    } // end switch
-  
+    } // end switch  
     // how many bits did we add?
     bitqlen += thesebits ;
     //===================
@@ -551,8 +517,7 @@ ISR(TIMER1_COMPA_vect)
         // not an HDLC frame marker, but =is= a data character 
         // add it to the incoming message
         msg[ msg_pos ] = byteval ;
-        msg_pos++ ;
-          
+        msg_pos++ ;          
         // is this good enough of a KISS frame to turn on the carrier-detect light?
         // we know we have an HDLC (because we're in a frame); 
         // check for end-of-header marker
@@ -615,7 +580,6 @@ inline void Serial_Processes(void)
   return;
 }                                                 // End Serial_Processes(void)
 
-static unsigned char prevdata; 
 /*******************************************************************************
 *  MsgHandler(char data) 
 *  Takes in a byte at a time and determins what we should do with it from the 
@@ -653,9 +617,6 @@ inline void MsgHandler(unsigned char data)
   else if (TRUE == transmit)ax25sendByte(data); // if we are transmitting then just send the data
   prevdata = data; // copy the data for our state machine 
 }
-
-// Global variables
-static unsigned short crc;
 
 void decode_ax25 (void)
 {
@@ -752,7 +713,6 @@ void decode_ax25 (void)
   UDR0 = 10 ;    // LF
 }
 
-
 void send_serial_str(const char * inputstr) 
 {
   for ( x=0 ; x < strlen( inputstr ) ; x++ ) 
@@ -766,8 +726,6 @@ void send_serial_str(const char * inputstr)
   }
 }
 
-
-/******************************************************************************/
 void mainTransmit(void)
 {
   //UCSR0B &= ~((1<<RXCIE0)|(1<<TXCIE0));               // Disable the serial interrupts
@@ -783,8 +741,6 @@ void mainTransmit(void)
   return;
 }                                                       // End mainTransmit(void)
 
-
-/******************************************************************************/
 void mainReceive(void)
 {
   ax25sendFooter();                                     // Send APRS footer
@@ -797,8 +753,6 @@ void mainReceive(void)
   return;
 }                                                       // End mainReceive(void)
 
-
-/******************************************************************************/
 void mainDelay(unsigned char timeout)
 {
   maindelay = TRUE;                                     // Set the condition variable
@@ -811,8 +765,6 @@ void mainDelay(unsigned char timeout)
   return;
 }                                                       // End mainDelay(unsigned int timeout)
 
-
-/******************************************************************************/
 void ax25sendHeader(void)
 {
   static unsigned char  loop_delay;
@@ -826,7 +778,6 @@ void ax25sendHeader(void)
   return;
 }                                                       // End ax25sendHeader(void)
 
-/******************************************************************************/
 void ax25sendFooter(void)
 {
   static unsigned char  crchi;
@@ -836,7 +787,7 @@ void ax25sendFooter(void)
   ax25sendByte(0x7E);                                   // Send a flag to end the packet
   return;
 }                                                       // End ax25sendFooter(void)
-/******************************************************************************/
+
 void ax25sendByte(unsigned char txbyte)
 {
   static char mloop;
@@ -875,7 +826,7 @@ void ax25sendByte(unsigned char txbyte)
   }
   return;
 }                                                       // End ax25sendByte(unsigned char txbyte)
-/*******************************************************************************/
+
 void ax25crcBit(int lsb_int)
 {
   static unsigned short xor_int;
