@@ -41,20 +41,19 @@ Version history:
 20100323 (0.01) First draft.
 */
 
-// compiler options
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
+// compiler options // used for debug random hags
+//#pragma GCC push_options
+//#pragma GCC optimize ("O0")
 
 // ==== defs
 #define WELCOME_MSG           "Arduino TNC v.0.15.3"
 #define MIN_PACKET_LEN        10
-#define PACKET_SIZE           200
+#define PACKET_SIZE           340
 #define AX25_MARK             0
 #define AX25_SPACE            1
 #define MAX_SYNC_ERRS         5
 #define MIN_DCD               20
 #define T3TOP                 1212
-#define F_CPU                 16000000UL
 #define READY_TO_SEND         (UCSR0A & (1<<UDRE0))
 #define CHECK_CRC_BY_DEFAULT  1                   // enable frame check sequence
 #define BIT_DELAY             205                 // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
@@ -63,7 +62,6 @@ Version history:
 #define MARK                  (103)               // gives us 1200.98hz close enough with 16mhz clock 
 #define TRUE                  (1)
 #define FALSE                 (0)
-#define BUF_SIZE              (200)               // Educated guess for a good buffer size
 #define SET_DDRB              (DDRB = 0x3F)
 #define DCD_ON                (PORTB |=  0x01)
 #define DCD_OFF               (PORTB &= ~0x01)
@@ -548,7 +546,7 @@ SIGNAL(TIMER2_OVF_vect) {
 
 /******************************************************************************/
 SIGNAL(USART_RX_vect) {
-    if (++inhead == BUF_SIZE) inhead = 0;           // Advance and wrap buffer pointer
+    if (++inhead == PACKET_SIZE) inhead = 0;           // Advance and wrap buffer pointer
     inbuf[inhead] = UDR0;                           // Transfer the byte to the input buffer
     return;
 }                                                 // End SIGNAL(SIG_UART_RECV)
@@ -558,7 +556,7 @@ inline void Serial_Processes(void) {
     PORTD ^= 0x04;
     if (intail != inhead)                           // If there are incoming bytes pending
     {
-        if (++intail == BUF_SIZE) intail = 0;         // Advance and wrap pointer
+        if (++intail == PACKET_SIZE) intail = 0;         // Advance and wrap pointer
         MsgHandler(inbuf[intail]);                    // And pass it to a handler
     }
     return;
@@ -788,5 +786,5 @@ void ax25crcBit(uint16_t lsb_int) {
     }
     return;
 }                                                       // End ax25crcBit(int lsb_int)
-#pragma GCC pop_options
+//#pragma GCC pop_options
 // end of file
