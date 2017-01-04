@@ -69,26 +69,18 @@ Version history:
 // ==== includes
 #include "Arduino.h"
 #include <avr/wdt.h>                              // watchdog lib
+#include <util/delay.h>
 
 // ==== protos
 void send_serial_str(const char *inputstr);
-
 void Serial_Processes(void);
-
 void MsgHandler(uint8_t data);
-
 void mainTransmit(void);
-
 void ax25sendHeader(void);
-
 void ax25sendByte(uint8_t txbyte);
-
 void ax25crcBit(uint16_t lsb_int);
-
 void decode_ax25(void);
-
 void ax25sendFooter(void);
-
 void mainReceive(void);
 
 // variables
