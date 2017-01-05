@@ -560,7 +560,7 @@ inline void Serial_Processes(void) {
     }
     if (outtail != outhead)                           // If there are incoming bytes pending
     {
-        if (++outtail >= PACKET_SIZE){
+        if (++outtail >= sizeof(serial_send_buffer)){
             outtail = 0;         // Advance and wrap pointer
         }
         while (!READY_TO_SEND){
@@ -707,7 +707,7 @@ void serial_buffer_push(uint8_t data) {
     if (++outhead >= sizeof(serial_send_buffer)){
         outhead = 0;           // Advance and wrap buffer pointer
     }
-    serial_send_buffer[inhead] = data;
+    serial_send_buffer[outhead] = data;
 }
 
 void send_serial_str(const char *inputstr) {
