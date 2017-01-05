@@ -123,11 +123,12 @@ static uint8_t sine_index;                  // Index for the D-to-A sequence
 volatile uint8_t inbuf[PACKET_SIZE + 1];      // USART input buffer array
 volatile uint16_t inhead;                      // USART input buffer head pointer
 volatile uint16_t intail;                      // USART input buffer tail pointer
+volatile uint16_t outhead;                      // USART output buffer head pointer
+volatile uint16_t outtail;                      // USART output buffer tail pointer
 static uint8_t prevdata;
 volatile uint8_t transmit;                 // Keeps track of TX/RX state
 volatile uint8_t txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
 volatile uint8_t maindelay;                 // State of mainDelay function
-volatile uint16_t serial_send_buffer_length;// Data to send length
 
 void setup(void) {
     wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received
@@ -165,8 +166,6 @@ void setup(void) {
                                                     // see the chip-specific DEFINEs above for details
     SET_DDRB;
     PORTB &= 0x00;                                // set
-
-    serial_send_buffer_length = 0;
 
     delay(1000);                           // pause to settle
     send_serial_str(WELCOME_MSG);              // announce ourselves
@@ -559,14 +558,15 @@ inline void Serial_Processes(void) {
     if (transmit && ((millis() - last_serial_processed_time) > TRANSMIT_SERIAL_TIMEOUT)){
         mainReceive(); // serial data timeout!
     }
-    if (serial_send_buffer_length){
-        for (uint16_t i = 0; i < serial_send_buffer_length; ++i) {
-            while (!READY_TO_SEND){
-                wdt_reset();
-            }
-            UDR0 = serial_send_buffer[i];
+    if (outtail != outhead)                           // If there are incoming bytes pending
+    {
+        if (++outtail >= PACKET_SIZE){
+            outtail = 0;         // Advance and wrap pointer
         }
-        serial_send_buffer_length = 0;
+        while (!READY_TO_SEND){
+            wdt_reset();
+        }
+        UDR0 = serial_send_buffer[outtail];
     }
     return;
 }
@@ -704,9 +704,10 @@ void decode_ax25(void) {
 }
 
 void serial_buffer_push(uint8_t data) {
-    //TODO: sprawdzanie czy nie za duzo danych?
-    serial_send_buffer[serial_send_buffer_length] = data;
-    serial_send_buffer_length++;
+    if (++outhead >= sizeof(serial_send_buffer)){
+        outhead = 0;           // Advance and wrap buffer pointer
+    }
+    serial_send_buffer[inhead] = data;
 }
 
 void send_serial_str(const char *inputstr) {
