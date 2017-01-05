@@ -65,6 +65,7 @@ Version history:
 #define SET_DDRB              (DDRB = 0x3F)
 #define DCD_ON                (PORTB |=  0x01)
 #define DCD_OFF               (PORTB &= ~0x01)
+#define TRANSMIT_SERIAL_TIMEOUT 1000    // ms
 
 // ==== includes
 #include "Arduino.h"
@@ -112,6 +113,7 @@ uint8_t sync_err_cnt,                     // number of sync errors in this frame
         thesebits;                       // number of elapsed bit durations
 int8_t adc_delay[6];                    // delay line for adc readings
 uint32_t bitq;                            // rec'd bits awaiting grouping into bytes
+uint32_t last_serial_processed_time;
 
 static uint16_t crc;
 static uint8_t sine[16] = {58, 22, 46, 30, 62, 30, 46, 22, 6, 42, 18, 34, 2, 34, 18, 42};
@@ -126,6 +128,7 @@ volatile uint8_t maindelay;                 // State of mainDelay function
 
 void setup(void) {
     wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received
+    cli();
     UBRR0H = 0;                                  // timer value of 19.2kbps serial output to match bootloader
     UBRR0L = 103;
     UCSR0A |= (1 << U2X0);
@@ -159,11 +162,11 @@ void setup(void) {
                                                     // see the chip-specific DEFINEs above for details
     SET_DDRB;
     PORTB &= 0x00;                                // set
-    _delay_ms(1000);                           // pause to settle
+    delay(1000);                           // pause to settle
     send_serial_str(WELCOME_MSG);              // announce ourselves
     send_serial_str("\n\n\n");
     sei();                                       // enable interrupts
-    _delay_ms(1000);                           // pause again for ADC bias to settle
+    delay(1000);                           // pause again for ADC bias to settle
 }
 
 void loop(void) {
@@ -461,15 +464,7 @@ ISR(TIMER1_COMPA_vect) {
                 } else {
                     // in a frame, and have some data, so this HDLC is probably
                     // a frame-ender (and maybe also a starter)
-                    if (msg_pos > 0) {   /*
-            printf( "Message was:" ) ;
-            for ( x=0 ; x < msg_pos ; x++ )
-            {
-                printf( " %02X", msg[x] ) ;
-            }    
-            printf( "\n" ) ; 
-            printf( "Which decodes as:\n" ) ;
-            */
+                    if (msg_pos > 0) {
                         // send frame data out the serial port
                         decode_ax25();
                     }
@@ -538,7 +533,9 @@ SIGNAL(TIMER2_OVF_vect) {
 
 /******************************************************************************/
 SIGNAL(USART_RX_vect) {
-    if (++inhead == PACKET_SIZE) inhead = 0;           // Advance and wrap buffer pointer
+    if (++inhead >= PACKET_SIZE){
+      inhead = 0;           // Advance and wrap buffer pointer
+    }
     inbuf[inhead] = UDR0;                           // Transfer the byte to the input buffer
     return;
 }                                                 // End SIGNAL(SIG_UART_RECV)
@@ -548,8 +545,13 @@ inline void Serial_Processes(void) {
     PORTD ^= 0x04;
     if (intail != inhead)                           // If there are incoming bytes pending
     {
-        if (++intail == PACKET_SIZE) intail = 0;         // Advance and wrap pointer
+        if (++intail >= PACKET_SIZE){
+          intail = 0;         // Advance and wrap pointer
+        }
         MsgHandler(inbuf[intail]);                    // And pass it to a handler
+    }
+    if (transmit && ((millis() - last_serial_processed_time) > TRANSMIT_SERIAL_TIMEOUT)){
+        mainReceive(); // serial data timeout!
     }
     return;
 }                                                 // End Serial_Processes(void)
@@ -579,8 +581,11 @@ inline void MsgHandler(uint8_t data) {
         if (0xDB == prevdata) {
             ax25sendByte(0xDB);
         }
-    } else if (TRUE == transmit)ax25sendByte(data); // if we are transmitting then just send the data
+    } else if (TRUE == transmit) {
+        ax25sendByte(data); // if we are transmitting then just send the data
+    }
     prevdata = data; // copy the data for our state machine
+    last_serial_processed_time = (uint32_t) millis();
 }
 
 void decode_ax25(void) {
@@ -602,6 +607,8 @@ void decode_ax25(void) {
             return;
         }
     }
+
+
     // lop off last 2 bytes (FCS checksum, which we're not sending to the PC)
     for (x = 0; x < (msg_pos - 2); x++) {
         switch (decode_state) {
@@ -684,10 +691,12 @@ void mainTransmit(void) {
     sine_index = 0;                                       // set our transmitter so it always starts the sine generator from 0
     txtone = MARK;                                        // set up the bits so we always start with the same tone for the header (otherwise it alternates)
     // enable overflow interrupt
+    cli();
     TIMSK2 |= (1 << TOIE2);                                 // enable timer 2
     TCCR1B = (1 << WGM12) | (2 << CS10);                     // setup timer 1
     TCNT2 = BIT_DELAY;                                    // setup timer two to trigger at 1200 times a second
     transmit = TRUE;                                      // Enable the transmitter
+    sei();
     ax25sendHeader();                                     // Send APRS header
     return;
 }                                                       // End mainTransmit(void)
@@ -695,10 +704,12 @@ void mainTransmit(void) {
 void mainReceive(void) {
     ax25sendFooter();                                     // Send APRS footer
     transmit = FALSE;                                     // Disable transmitter
+    cli();
     PORTB &= 0x00;                                        // Make sure the transmitter is disabled by turning off transmit pin was 0x3D to turn off ptt
     TCCR1B = (1 << WGM12) | (1 << CS10);
     TIMSK2 &= ~(1 << TOIE2);                                // disable timer two interrupt
     OCR1A = T3TOP;                                       // set timer 1 back to triggering at the recieve sample frequency
+    sei();
     sine_index = 0;                                       // set the sine back to 0 (redundant)
     return;
 }                                                       // End mainReceive(void)
