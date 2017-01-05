@@ -1,5 +1,5 @@
 --------------------------------------------------------------
-Arduino TNC plus lista czêœci
+Arduino TNC plus lista czÄ™Å›ci
 --------------------------------------------------------------
 Rezystory:
 100k			1
@@ -25,15 +25,15 @@ Tranzystory:
 BC547			1
 BC560			1
 
-Pozosta³e:
+PozostaÅ‚e:
 TCM3105			1
 Kwarc 4,43MHz		1
 4N255			1
 dioda 1N4148		2
-Critchley 9000		2	(transformator separuj¹cy)
-Zaciski œrubowe x2	3	
-goldpin ¿eñski listwa	1
-goldpin mêski listwa	1
+Critchley 9000		2	(transformator separujÄ…cy)
+Zaciski Å›rubowe x2	3	
+goldpin Å¼eÅ„ski listwa	1
+goldpin mÄ™ski listwa	1
 arduino nano		1
 PCB			1
 --------------------------------------------------------------
