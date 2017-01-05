@@ -83,6 +83,7 @@ void ax25crcBit(uint16_t lsb_int);
 void decode_ax25(void);
 void ax25sendFooter(void);
 void mainReceive(void);
+void serial_buffer_push(uint8_t data);
 
 // variables
 int8_t adcval;                          // zero-biased ADC input
@@ -103,6 +104,7 @@ uint8_t rawadc,                           // value read directly from ADCH regis
         byteval,                          // rec'd byte, read from bitq
         cb_pos,                           // position within the circular buffer
         msg[PACKET_SIZE + 1],             // rec'd data
+        serial_send_buffer[PACKET_SIZE * 2], // buffer for sending decoded packets via serial, size must be > msg because of some escaping sequences
         test,                             // temp variable
         decode_state,                     // section of rec'd data being parsed
         bias_cnt,                         // number of ADC samples collected (toward goal of 128)
@@ -125,6 +127,7 @@ static uint8_t prevdata;
 volatile uint8_t transmit;                 // Keeps track of TX/RX state
 volatile uint8_t txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
 volatile uint8_t maindelay;                 // State of mainDelay function
+volatile uint16_t serial_send_buffer_length;// Data to send length
 
 void setup(void) {
     wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received
@@ -162,6 +165,9 @@ void setup(void) {
                                                     // see the chip-specific DEFINEs above for details
     SET_DDRB;
     PORTB &= 0x00;                                // set
+
+    serial_send_buffer_length = 0;
+
     delay(1000);                           // pause to settle
     send_serial_str(WELCOME_MSG);              // announce ourselves
     send_serial_str("\n\n\n");
@@ -553,8 +559,18 @@ inline void Serial_Processes(void) {
     if (transmit && ((millis() - last_serial_processed_time) > TRANSMIT_SERIAL_TIMEOUT)){
         mainReceive(); // serial data timeout!
     }
+    if (serial_send_buffer_length){
+        for (uint16_t i = 0; i < serial_send_buffer_length; ++i) {
+            while (!READY_TO_SEND){
+                wdt_reset();
+            }
+            UDR0 = serial_send_buffer[i];
+        }
+        serial_send_buffer_length = 0;
+    }
     return;
-}                                                 // End Serial_Processes(void)
+}
+// End Serial_Processes(void)
 
 /*******************************************************************************
 *  MsgHandler(char data) 
@@ -608,34 +624,39 @@ void decode_ax25(void) {
         }
     }
 
-
     // lop off last 2 bytes (FCS checksum, which we're not sending to the PC)
     for (x = 0; x < (msg_pos - 2); x++) {
         switch (decode_state) {
             // note the goofy order!!
             case 0:
                 // just starting
-                while (!READY_TO_SEND);
-                UDR0 = 0xC0;                 // frame start/end marker
-                while (!READY_TO_SEND);
-                UDR0 = 0x00;                 // data on port 0
-                while (!READY_TO_SEND);
-                UDR0 = msg[x];
+//                while (!READY_TO_SEND);
+//                UDR0 = 0xC0;                 // frame start/end marker
+//                while (!READY_TO_SEND);
+//                UDR0 = 0x00;                 // data on port 0
+//                while (!READY_TO_SEND);
+//                UDR0 = msg[x];
+                serial_buffer_push(0xC0);
+                serial_buffer_push(0x00);
+                serial_buffer_push(msg[x]);
                 decode_state = 1;
                 break;
 
             case 2:
                 // got the 0x03, waiting for the 0xF0
                 if (msg[x] == 0xF0) {
-                    while (!READY_TO_SEND);
-                    UDR0 = msg[x];
+//                    while (!READY_TO_SEND);
+//                    UDR0 = msg[x];
+                    serial_buffer_push(msg[x]);
                     decode_state = 3;
                 } else {
                     // wow - corrupt packet? abort
-                    while (!READY_TO_SEND);
-                    UDR0 = 13;
-                    while (!READY_TO_SEND);
-                    UDR0 = 10;
+//                    while (!READY_TO_SEND);
+//                    UDR0 = 13;
+//                    while (!READY_TO_SEND);
+//                    UDR0 = 10;
+                    serial_buffer_push(13);
+                    serial_buffer_push(10);
                     return;
                 }
                 break;
@@ -643,8 +664,9 @@ void decode_ax25(void) {
             case 1:
                 // in the header
                 if (msg[x] == 0x03) {
-                    while (!READY_TO_SEND);
-                    UDR0 = msg[x];
+//                    while (!READY_TO_SEND);
+//                    UDR0 = msg[x];
+                    serial_buffer_push(msg[x]);
                     decode_state = 2;
                     break;
                 }
@@ -653,25 +675,38 @@ void decode_ax25(void) {
             default:
                 // payload or header
                 if (msg[x] == 0xC0) {
-                    while (!READY_TO_SEND);
-                    UDR0 = 0xDB;
+//                    while (!READY_TO_SEND);
+//                    UDR0 = 0xDB;
+                    serial_buffer_push(0xDB);
                 }
-                while (!READY_TO_SEND);
-                UDR0 = msg[x];
+//                while (!READY_TO_SEND);
+//                UDR0 = msg[x];
+                serial_buffer_push(msg[x]);
+
                 if (msg[x] == 0xDB) {
-                    while (!READY_TO_SEND);
-                    UDR0 = 0xDD;
+//                    while (!READY_TO_SEND);
+//                    UDR0 = 0xDD;
+                    serial_buffer_push(0xDD);
                 }
                 break;
         }
 
     } // end for
-    while (!READY_TO_SEND);
-    UDR0 = 0xC0;  // end of frame
-    while (!READY_TO_SEND);
-    UDR0 = 13;    // CR
-    while (!READY_TO_SEND);
-    UDR0 = 10;    // LF
+//    while (!READY_TO_SEND);
+//    UDR0 = 0xC0;  // end of frame
+//    while (!READY_TO_SEND);
+//    UDR0 = 13;    // CR
+//    while (!READY_TO_SEND);
+//    UDR0 = 10;    // LF
+    serial_buffer_push(0xC0);
+    serial_buffer_push(13);
+    serial_buffer_push(10);
+}
+
+void serial_buffer_push(uint8_t data) {
+    //TODO: sprawdzanie czy nie za duzo danych?
+    serial_send_buffer[serial_send_buffer_length] = data;
+    serial_send_buffer_length++;
 }
 
 void send_serial_str(const char *inputstr) {
