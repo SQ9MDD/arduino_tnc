@@ -23,7 +23,7 @@
     added by Kieran Levin, KC9BZY kieranlevin.com kilo india ralf alpha Mike 9 at-sign yahoo dot com
      
 Version history:
-                   Code, PCB and more: https://github.com/SQ9MDD/arduino_tnc/
+20170108 (0.15.4) Final STABLE RELEASE, Reformating Code, Download PCB and more from: https://github.com/SQ9MDD/arduino_tnc/
 20170103-06 (0.15.3) SQ5RWU major fixes and improvements
 20170102 (0.15.2) SQ9MDD clean up the code, reformating comments, delete not used variables, add compiler options, thanx to Luca SQ5RWU,
                   removed Mega option, some small fixes.
