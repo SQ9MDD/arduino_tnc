@@ -15,12 +15,6 @@
       John Hansen, W2FS
       Thomas Sailer, HB9JNX/AE4WA
       
-    Anyone wanting to use this code is strongly encouraged to:
-      1. Reconsider.
-      2. Buy a pre-made device from "argentdata.com" or "tncx.com" instead.
-      3. At the very least, download the datasheet for the ATmega328P and/or ATmega1280.
-      4. Bookmark "http://www.nongnu.org/avr-libc/".
-    
     If you do find anything useful about this code, please let me know, at:   
     Kilo India Four Mike Charlie Whiskey at-sign Golf Mike Alpha India Lima Dot Com.    
     Robert Marshall, KI4MCW    
@@ -29,6 +23,8 @@
     added by Kieran Levin, KC9BZY kieranlevin.com kilo india ralf alpha Mike 9 at-sign yahoo dot com
      
 Version history:
+                   Code, PCB and more: https://github.com/SQ9MDD/arduino_tnc/
+20170103-06 (0.15.3) SQ5RWU major fixes and improvements
 20170102 (0.15.2) SQ9MDD clean up the code, reformating comments, delete not used variables, add compiler options, thanx to Luca SQ5RWU,
                   removed Mega option, some small fixes.
 20150214 (0.15.0) SQ9MDD add watchdog
@@ -41,12 +37,8 @@ Version history:
 20100323 (0.01) First draft.
 */
 
-// compiler options // used for debug random hags
-//#pragma GCC push_options
-//#pragma GCC optimize ("O0")
-
 // ==== defs
-#define WELCOME_MSG           "Arduino TNC v.0.15.3"
+#define WELCOME_MSG           "Arduino TNC v.0.15.4"
 #define MIN_PACKET_LEN        10
 #define PACKET_SIZE           340
 #define AX25_MARK             0
@@ -55,11 +47,11 @@ Version history:
 #define MIN_DCD               20
 #define T3TOP                 1212
 #define READY_TO_SEND         (UCSR0A & (1<<UDRE0))
-#define CHECK_CRC_BY_DEFAULT  1                   // enable frame check sequence
-#define BIT_DELAY             205                 // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
-#define TXDELAY               50                  // Number of 6.7ms delay cycles (send flags)
-#define SPACE                 (55)                // gives us 2228hz
-#define MARK                  (103)               // gives us 1200.98hz close enough with 16mhz clock 
+#define CHECK_CRC_BY_DEFAULT  1                         // enable frame check sequence
+#define BIT_DELAY             205                       // 189 Delay for 0.833 ms (189 for 14.7456 MHz) 205 for 16mhz
+#define TXDELAY               50                        // Number of 6.7ms delay cycles (send flags)
+#define SPACE                 (55)                      // gives us 2228hz
+#define MARK                  (103)                     // gives us 1200.98hz close enough with 16mhz clock 
 #define TRUE                  (1)
 #define FALSE                 (0)
 #define SET_DDRB              (DDRB = 0x3F)
@@ -69,85 +61,72 @@ Version history:
 
 // ==== includes
 #include "Arduino.h"
-#include <avr/wdt.h>                              // watchdog lib
+#include <avr/wdt.h>                                    // watchdog lib
 #include <util/delay.h>
 
-// ==== protos
-void send_serial_str(const char *inputstr);
-void Serial_Processes(void);
-void MsgHandler(uint8_t data);
-void mainTransmit(void);
-void ax25sendHeader(void);
-void ax25sendByte(uint8_t txbyte);
-void ax25crcBit(uint16_t lsb_int);
-void decode_ax25(void);
-void ax25sendFooter(void);
-void mainReceive(void);
-void serial_buffer_push(uint8_t data);
-
 // variables
-int8_t adcval;                          // zero-biased ADC input
-int16_t mult_cb[7],                       // circular buffer for adc*delay values
-        mult_sum,                         // sum of mult_cb values
-        bias_sum;                        // sum of last 128 ADC readings
-uint16_t msg_pos;                        // bytes rec'd, next array element to fill
-uint8_t rawadc,                           // value read directly from ADCH register
-        since_last_chg,                   // samples since the last MARK/SPACE symbol change
-        phase_err,                        // symbol transition timing error, in samples
-        current_symbol,                   // MARK or SPACE
-        last_symbol,                      // MARK or SPACE from previous reading
-        last_symbol_inaframe,             // MARK or SPACE from one bit-duration ago
-        inaframe,                         // rec'd start-of-frame marker
-        bittimes,                         // bit durations that have elapsed
-        bitqlen,                          // number of rec'd bits in bitq
-        popbits,                          // number of bits to pop (drop) off the end
-        byteval,                          // rec'd byte, read from bitq
-        cb_pos,                           // position within the circular buffer
-        msg[PACKET_SIZE + 1],             // rec'd data
-        serial_send_buffer[PACKET_SIZE * 2], // buffer for sending decoded packets via serial, size must be > msg because of some escaping sequences
-        test,                             // temp variable
-        decode_state,                     // section of rec'd data being parsed
-        bias_cnt,                         // number of ADC samples collected (toward goal of 128)
-        adc_bias,                         // center-value for ADC, self-adjusting
-        calc_crc = CHECK_CRC_BY_DEFAULT;  // check crc before sending to host
-uint8_t sync_err_cnt,                     // number of sync errors in this frame (so far)
-        bit_timer,                        // countdown one bit duration
-        thesebits;                       // number of elapsed bit durations
-int8_t adc_delay[6];                    // delay line for adc readings
-uint32_t bitq;                            // rec'd bits awaiting grouping into bytes
+int8_t adcval;                                          // zero-biased ADC input
+int16_t mult_cb[7],                                     // circular buffer for adc*delay values
+        mult_sum,                                       // sum of mult_cb values
+        bias_sum;                                       // sum of last 128 ADC readings
+uint16_t msg_pos;                                       // bytes rec'd, next array element to fill
+uint8_t rawadc,                                         // value read directly from ADCH register
+        since_last_chg,                                 // samples since the last MARK/SPACE symbol change
+        phase_err,                                      // symbol transition timing error, in samples
+        current_symbol,                                 // MARK or SPACE
+        last_symbol,                                    // MARK or SPACE from previous reading
+        last_symbol_inaframe,                           // MARK or SPACE from one bit-duration ago
+        inaframe,                                       // rec'd start-of-frame marker
+        bittimes,                                       // bit durations that have elapsed
+        bitqlen,                                        // number of rec'd bits in bitq
+        popbits,                                        // number of bits to pop (drop) off the end
+        byteval,                                        // rec'd byte, read from bitq
+        cb_pos,                                         // position within the circular buffer
+        msg[PACKET_SIZE + 1],                           // rec'd data
+        serial_send_buffer[PACKET_SIZE * 2],            // buffer for sending decoded packets via serial, size must be > msg because of some escaping sequences
+        test,                                           // temp variable
+        decode_state,                                   // section of rec'd data being parsed
+        bias_cnt,                                       // number of ADC samples collected (toward goal of 128)
+        adc_bias,                                       // center-value for ADC, self-adjusting
+        calc_crc = CHECK_CRC_BY_DEFAULT;                // check crc before sending to host
+uint8_t sync_err_cnt,                                   // number of sync errors in this frame (so far)
+        bit_timer,                                      // countdown one bit duration
+        thesebits;                                      // number of elapsed bit durations
+int8_t adc_delay[6];                                    // delay line for adc readings
+uint32_t bitq;                                          // rec'd bits awaiting grouping into bytes
 uint32_t last_serial_processed_time;
 
 static uint16_t crc;
 static uint8_t sine[16] = {58, 22, 46, 30, 62, 30, 46, 22, 6, 42, 18, 34, 2, 34, 18, 42};
-static uint8_t sine_index;                  // Index for the D-to-A sequence
-volatile uint8_t inbuf[PACKET_SIZE + 1];      // USART input buffer array
-volatile uint16_t inhead;                      // USART input buffer head pointer
-volatile uint16_t intail;                      // USART input buffer tail pointer
-volatile uint16_t outhead;                      // USART output buffer head pointer
-volatile uint16_t outtail;                      // USART output buffer tail pointer
+static uint8_t sine_index;                              // Index for the D-to-A sequence
+volatile uint8_t inbuf[PACKET_SIZE + 1];                // USART input buffer array
+volatile uint16_t inhead;                               // USART input buffer head pointer
+volatile uint16_t intail;                               // USART input buffer tail pointer
+volatile uint16_t outhead;                              // USART output buffer head pointer
+volatile uint16_t outtail;                              // USART output buffer tail pointer
 static uint8_t prevdata;
-volatile uint8_t transmit;                 // Keeps track of TX/RX state
-volatile uint8_t txtone;                   // Used in main.c SIGNAL(SIG_OVERFLOW2)
-volatile uint8_t maindelay;                 // State of mainDelay function
+volatile uint8_t transmit;                              // Keeps track of TX/RX state
+volatile uint8_t txtone;                                // Used in main.c SIGNAL(SIG_OVERFLOW2)
+volatile uint8_t maindelay;                             // State of mainDelay function
 
 void setup(void) {
-    wdt_enable(WDTO_8S);                          // reset after eight second, if no "pat the dog" received
+    wdt_enable(WDTO_8S);                                // reset after eight second, if no "pat the dog" received
     cli();
-    UBRR0H = 0;                                  // timer value of 19.2kbps serial output to match bootloader
+    UBRR0H = 0;                                         // timer value of 19.2kbps serial output to match bootloader
     UBRR0L = 103;
     UCSR0A |= (1 << U2X0);
     UCSR0B |= (1 << TXEN0) | (1 << RXEN0);
     UCSR0C |= (1 << UCSZ01) | (1 << UCSZ00);
-    UCSR0B |= (1 << RXCIE0);                        // enable rx interrupt
+    UCSR0B |= (1 << RXCIE0);                            // enable rx interrupt
 
-    ADMUX = (1 << REFS0);                        // channel0, ref to external input (Aref)
-    ADMUX |= (1 << ADLAR);                        // left-justified (only need 8 bits)
-    ADCSRA = (1 << ADPS2);                        // pre-scale 16
-    ADCSRA |= (1 << ADATE);                        // auto-trigger (free-run)
-    ADCSRB = 0x00;                              // free-running
-    DIDR0 |= (1 << ADC0D);                        // disable digital driver on ADC0
-    ADCSRA |= (1 << ADEN);                         // enable ADC
-    ADCSRA |= (1 << ADSC);                         // trigger first conversion
+    ADMUX = (1 << REFS0);                               // channel0, ref to external input (Aref)
+    ADMUX |= (1 << ADLAR);                              // left-justified (only need 8 bits)
+    ADCSRA = (1 << ADPS2);                              // pre-scale 16
+    ADCSRA |= (1 << ADATE);                             // auto-trigger (free-run)
+    ADCSRB = 0x00;                                      // free-running
+    DIDR0 |= (1 << ADC0D);                              // disable digital driver on ADC0
+    ADCSRA |= (1 << ADEN);                              // enable ADC
+    ADCSRA |= (1 << ADSC);                              // trigger first conversion
 
     // use 16-bit timer to check the ADC at 13200 Hz.
     // this is 11x the 1200Hz MARK freq, and 6x the 2200Hz SPACE freq.
@@ -155,38 +134,38 @@ void setup(void) {
     TCCR1A = 0x00;
     TCCR1B = (1 << WGM12) | (1 << CS10);
     TCCR1C = 0x00;
-    OCR1A = T3TOP;                               //set timer trigger frequency
+    OCR1A = T3TOP;                                      //set timer trigger frequency
     TIMSK1 = (1 << OCIE1A);
-    TCCR2A = 0;                                   // use timer2 for a symbol (bit) timer
+    TCCR2A = 0;                                         // use timer2 for a symbol (bit) timer
     // Initialize the 8-bit Timer2 to clock at 1200hz
-    TCCR2B = 0x04;                                // Timer2 clock prescale of
-    TIFR2 = (1 << TOV2);                            // enable overflow interrupt flag to trigger on overflow
-                                                    // use blinky on "pin 13" as DCD light, use "pin 12" as sample clock heartbeat
-                                                    // the port/bit designation for these Arduino pins varies with the chip used
-                                                    // see the chip-specific DEFINEs above for details
+    TCCR2B = 0x04;                                      // Timer2 clock prescale of
+    TIFR2 = (1 << TOV2);                                // enable overflow interrupt flag to trigger on overflow
+                                                        // use blinky on "pin 13" as DCD light, use "pin 12" as sample clock heartbeat
+                                                        // the port/bit designation for these Arduino pins varies with the chip used
+                                                        // see the chip-specific DEFINEs above for details
     SET_DDRB;
-    PORTB &= 0x00;                                // set
+    PORTB &= 0x00;                                      // set
 
-    delay(1000);                           // pause to settle
-    send_serial_str(WELCOME_MSG);              // announce ourselves
+    delay(1000);                                        // pause to settle
+    send_serial_str(WELCOME_MSG);                       // announce ourselves
     send_serial_str("\n\n\n");
-    sei();                                       // enable interrupts
-    delay(1000);                           // pause again for ADC bias to settle
+    sei();                                              // enable interrupts
+    delay(1000);                                        // pause again for ADC bias to settle
 }
 
 void loop(void) {
     Serial_Processes();
-    wdt_reset();                                    // watchdog give me another second to do stuff (pat the dog)
+    wdt_reset();                                        // watchdog give me another second to do stuff (pat the dog)
 }
 
 // functions
 ISR(TIMER1_COMPA_vect) {
-    if (transmit)                                    // if transmitting output our sine tone
+    if (transmit)                                       // if transmitting output our sine tone
     {
-        ++sine_index;                                 // Increment index
-        sine_index &= 15;                             // And wrap to a max of 15
-        PORTB = sine[sine_index];                     // Load next D-to-A sinewave value
-        OCR1A = txtone;                               // Preload counter based on freq.
+        ++sine_index;                                   // Increment index
+        sine_index &= 15;                               // And wrap to a max of 15
+        PORTB = sine[sine_index];                       // Load next D-to-A sinewave value
+        OCR1A = txtone;                                 // Preload counter based on freq.
     } else {
         // calculate ADC bias (average of last 128 ADC samples)
         // this input is decoulped from the receiver with a capacitor,
@@ -531,37 +510,37 @@ ISR(TIMER1_COMPA_vect) {
 *
 **********************************************************************/
 SIGNAL(TIMER2_OVF_vect) {
-    //PORTB ^= 0x3C;//sine[sine_index];             // Load next D-to-A sinewave value
-    maindelay = FALSE;                              // Clear condition holding up mainDelay
-    TCNT2 = 0;                                      // Make long as possible delay
+    //PORTB ^= 0x3C;//sine[sine_index];                 // Load next D-to-A sinewave value
+    maindelay = FALSE;                                  // Clear condition holding up mainDelay
+    TCNT2 = 0;                                          // Make long as possible delay
 }
 
 /******************************************************************************/
 SIGNAL(USART_RX_vect) {
     if (++inhead >= PACKET_SIZE){
-      inhead = 0;           // Advance and wrap buffer pointer
+      inhead = 0;                                       // Advance and wrap buffer pointer
     }
-    inbuf[inhead] = UDR0;                           // Transfer the byte to the input buffer
+    inbuf[inhead] = UDR0;                               // Transfer the byte to the input buffer
     return;
-}                                                 // End SIGNAL(SIG_UART_RECV)
+}                                                       // End SIGNAL(SIG_UART_RECV)
 
 /******************************************************************************/
 inline void Serial_Processes(void) {
     PORTD ^= 0x04;
-    if (intail != inhead)                           // If there are incoming bytes pending
+    if (intail != inhead)                               // If there are incoming bytes pending
     {
         if (++intail >= PACKET_SIZE){
-          intail = 0;         // Advance and wrap pointer
+          intail = 0;                                   // Advance and wrap pointer
         }
-        MsgHandler(inbuf[intail]);                    // And pass it to a handler
+        MsgHandler(inbuf[intail]);                      // And pass it to a handler
     }
     if (transmit && ((millis() - last_serial_processed_time) > TRANSMIT_SERIAL_TIMEOUT)){
-        mainReceive(); // serial data timeout!
+        mainReceive();                                  // serial data timeout!
     }
-    if (outtail != outhead)                           // If there are incoming bytes pending
+    if (outtail != outhead)                             // If there are incoming bytes pending
     {
         if (++outtail >= sizeof(serial_send_buffer)){
-            outtail = 0;         // Advance and wrap pointer
+            outtail = 0;                                // Advance and wrap pointer
         }
         while (!READY_TO_SEND){
             wdt_reset();
@@ -580,34 +559,33 @@ inline void Serial_Processes(void) {
 *******************************************************************************/
 inline void MsgHandler(uint8_t data) {
     if (0xC0 == prevdata) {
-        if ((0x00 == data)) { //we have the start of a new message
+        if ((0x00 == data)) {                           //we have the start of a new message
             mainTransmit();
         }
-        //TODO setup other modem parameters here... such as txtail etc....
-    } else if ((0xC0 == data) && (transmit == TRUE))// now we have the end of a message
+    } else if ((0xC0 == data) && (transmit == TRUE))    // now we have the end of a message
     {
         mainReceive();
-    } else if (0xDC == data) // we may have an escape byte
+    } else if (0xDC == data)                            // we may have an escape byte
     {
         if (0xDB == prevdata) {
             ax25sendByte(0xC0);
         }
-    } else if (0xDD == data) // we may have an escape byte
+    } else if (0xDD == data)                            // we may have an escape byte
     {
         if (0xDB == prevdata) {
             ax25sendByte(0xDB);
         }
     } else if (TRUE == transmit) {
-        ax25sendByte(data); // if we are transmitting then just send the data
+        ax25sendByte(data);                             // if we are transmitting then just send the data
     }
-    prevdata = data; // copy the data for our state machine
+    prevdata = data;                                    // copy the data for our state machine
     last_serial_processed_time = (uint32_t) millis();
 }
 
 void decode_ax25(void) {
     // Take the data in the msg array, and send it out the serial port.
     uint16_t x = 0;
-    decode_state = 0;     // 0=just starting, 1=header, 2=got 0x03, 3=got 0xF0 (payload data)
+    decode_state = 0;                                   // 0=just starting, 1=header, 2=got 0x03, 3=got 0xF0 (payload data)
     if (calc_crc) {
         crc = 0xFFFF;
         //(ax25crcBit(bit_zero));
@@ -631,9 +609,9 @@ void decode_ax25(void) {
             case 0:
                 // just starting
 //                while (!READY_TO_SEND);
-//                UDR0 = 0xC0;                 // frame start/end marker
+//                UDR0 = 0xC0;                          // frame start/end marker
 //                while (!READY_TO_SEND);
-//                UDR0 = 0x00;                 // data on port 0
+//                UDR0 = 0x00;                          // data on port 0
 //                while (!READY_TO_SEND);
 //                UDR0 = msg[x];
                 serial_buffer_push(0xC0);
@@ -692,12 +670,6 @@ void decode_ax25(void) {
         }
 
     } // end for
-//    while (!READY_TO_SEND);
-//    UDR0 = 0xC0;  // end of frame
-//    while (!READY_TO_SEND);
-//    UDR0 = 13;    // CR
-//    while (!READY_TO_SEND);
-//    UDR0 = 10;    // LF
     serial_buffer_push(0xC0);
     serial_buffer_push(13);
     serial_buffer_push(10);
@@ -722,39 +694,39 @@ void send_serial_str(const char *inputstr) {
 }
 
 void mainTransmit(void) {
-    //UCSR0B &= ~((1<<RXCIE0)|(1<<TXCIE0));               // Disable the serial interrupts
-    //TCCR2B = 0x02;                                      // Timer2 clock prescale of 8
-    sine_index = 0;                                       // set our transmitter so it always starts the sine generator from 0
-    txtone = MARK;                                        // set up the bits so we always start with the same tone for the header (otherwise it alternates)
+    //UCSR0B &= ~((1<<RXCIE0)|(1<<TXCIE0));             // Disable the serial interrupts
+    //TCCR2B = 0x02;                                    // Timer2 clock prescale of 8
+    sine_index = 0;                                     // set our transmitter so it always starts the sine generator from 0
+    txtone = MARK;                                      // set up the bits so we always start with the same tone for the header (otherwise it alternates)
     // enable overflow interrupt
     cli();
-    TIMSK2 |= (1 << TOIE2);                                 // enable timer 2
-    TCCR1B = (1 << WGM12) | (2 << CS10);                     // setup timer 1
-    TCNT2 = BIT_DELAY;                                    // setup timer two to trigger at 1200 times a second
-    transmit = TRUE;                                      // Enable the transmitter
+    TIMSK2 |= (1 << TOIE2);                             // enable timer 2
+    TCCR1B = (1 << WGM12) | (2 << CS10);                // setup timer 1
+    TCNT2 = BIT_DELAY;                                  // setup timer two to trigger at 1200 times a second
+    transmit = TRUE;                                    // Enable the transmitter
     sei();
-    ax25sendHeader();                                     // Send APRS header
+    ax25sendHeader();                                   // Send APRS header
     return;
 }                                                       // End mainTransmit(void)
 
 void mainReceive(void) {
-    ax25sendFooter();                                     // Send APRS footer
-    transmit = FALSE;                                     // Disable transmitter
+    ax25sendFooter();                                   // Send APRS footer
+    transmit = FALSE;                                   // Disable transmitter
     cli();
-    PORTB &= 0x00;                                        // Make sure the transmitter is disabled by turning off transmit pin was 0x3D to turn off ptt
+    PORTB &= 0x00;                                      // Make sure the transmitter is disabled by turning off transmit pin was 0x3D to turn off ptt
     TCCR1B = (1 << WGM12) | (1 << CS10);
-    TIMSK2 &= ~(1 << TOIE2);                                // disable timer two interrupt
-    OCR1A = T3TOP;                                       // set timer 1 back to triggering at the recieve sample frequency
+    TIMSK2 &= ~(1 << TOIE2);                            // disable timer two interrupt
+    OCR1A = T3TOP;                                      // set timer 1 back to triggering at the recieve sample frequency
     sei();
-    sine_index = 0;                                       // set the sine back to 0 (redundant)
+    sine_index = 0;                                     // set the sine back to 0 (redundant)
     return;
 }                                                       // End mainReceive(void)
 
 void mainDelay(uint8_t timeout) {
-    maindelay = TRUE;                                     // Set the condition variable
-    TCNT2 = 255 - timeout;                                // Set desired delay
+    maindelay = TRUE;                                   // Set the condition variable
+    TCNT2 = 255 - timeout;                              // Set desired delay
     while (maindelay) {
-        //asm("nop");                               //do something TODO process serial data here...
+        //asm("nop");                                   //do something TODO process serial data here...
     }
     //TCNT2 = (255 - BIT_DELAY);
     return;
@@ -762,11 +734,11 @@ void mainDelay(uint8_t timeout) {
 
 void ax25sendHeader(void) {
     static uint8_t loop_delay;
-    crc = 0xFFFF;                                         // Initialize the crc register
+    crc = 0xFFFF;                                       // Initialize the crc register
     // Transmit the Flag field to begin the UI-Frame
     // Adjust length for txdelay (each one takes 6.7ms)
     for (loop_delay = 0; loop_delay < TXDELAY; loop_delay++) {
-        (ax25sendByte(0x7E));                               //send the sync header byte
+        (ax25sendByte(0x7E));                           //send the sync header byte
     }
     return;
 }                                                       // End ax25sendHeader(void)
@@ -774,9 +746,9 @@ void ax25sendHeader(void) {
 void ax25sendFooter(void) {
     static uint8_t crchi;
     crchi = (crc >> 8) ^ 0xFF;
-    ax25sendByte(crc ^ 0xFF);                               // Send the low byte of the crc
-    ax25sendByte(crchi);                                  // Send the high byte of the crc
-    ax25sendByte(0x7E);                                   // Send a flag to end the packet
+    ax25sendByte(crc ^ 0xFF);                           // Send the low byte of the crc
+    ax25sendByte(crchi);                                // Send the high byte of the crc
+    ax25sendByte(0x7E);                                 // Send a flag to end the packet
     return;
 }                                                       // End ax25sendFooter(void)
 
@@ -785,46 +757,45 @@ void ax25sendByte(uint8_t txbyte) {
     static uint8_t bitbyte;
     static uint8_t bit_zero;
     static uint8_t sequential_ones;
-    bitbyte = txbyte;                                     // Bitbyte will be rotated through
+    bitbyte = txbyte;                                   // Bitbyte will be rotated through
     for (mloop = 0; mloop < 8; mloop++)                 // Loop for eight bits in the byte
     {
-        bit_zero = bitbyte & 0x01;                          // Set aside the least significant bit
-        if (txbyte == 0x7E)                                 // Is the transmit character a flag?
+        bit_zero = bitbyte & 0x01;                      // Set aside the least significant bit
+        if (txbyte == 0x7E)                             // Is the transmit character a flag?
         {
-            sequential_ones = 0;                              // it is immune from sequential 1's
-        } else                                                // The transmit character is not a flag
+            sequential_ones = 0;                        // it is immune from sequential 1's
+        } else                                          // The transmit character is not a flag
         {
-            (ax25crcBit(bit_zero));                           // So modify the checksum
+            (ax25crcBit(bit_zero));                     // So modify the checksum
         }
-        if (!(bit_zero))                                    // Is the least significant bit low?
+        if (!(bit_zero))                                // Is the least significant bit low?
         {
-            sequential_ones = 0;                              // Clear the number of ones we have sent
-            txtone = (txtone == MARK) ? SPACE : MARK;          // Toggle transmit tone
-        } else                                                // Else, least significant bit is high
+            sequential_ones = 0;                        // Clear the number of ones we have sent
+            txtone = (txtone == MARK) ? SPACE : MARK;   // Toggle transmit tone
+        } else                                          // Else, least significant bit is high
         {
-            if (++sequential_ones == 5)                       // Is this the 5th "1" in a row?
+            if (++sequential_ones == 5)                 // Is this the 5th "1" in a row?
             {
-                mainDelay(BIT_DELAY);                           // Go ahead and send it
+                mainDelay(BIT_DELAY);                   // Go ahead and send it
 
                 txtone = (txtone == MARK) ? SPACE : MARK;        // Toggle transmit tone
-                sequential_ones = 0;                            // Clear the number of ones we have sent
+                sequential_ones = 0;                    // Clear the number of ones we have sent
             }
         }
-        bitbyte >>= 1;                                      // Shift the reference byte one bit right
-        mainDelay(BIT_DELAY);                               // Pause for the bit to be sent
+        bitbyte >>= 1;                                  // Shift the reference byte one bit right
+        mainDelay(BIT_DELAY);                           // Pause for the bit to be sent
     }
     return;
 }                                                       // End ax25sendByte(uint8_t txbyte)
 
 void ax25crcBit(uint16_t lsb_int) {
     static uint16_t xor_int;
-    xor_int = crc ^ lsb_int;                              // XOR lsb of CRC with the latest bit
-    crc >>= 1;                                            // Shift 16-bit CRC one bit to the right
-    if (xor_int & 0x0001)                                 // If XOR result from above has lsb set
+    xor_int = crc ^ lsb_int;                            // XOR lsb of CRC with the latest bit
+    crc >>= 1;                                          // Shift 16-bit CRC one bit to the right
+    if (xor_int & 0x0001)                               // If XOR result from above has lsb set
     {
-        crc ^= 0x8408;                                      // Shift 16-bit CRC one bit to the right
+        crc ^= 0x8408;                                  // Shift 16-bit CRC one bit to the right
     }
     return;
 }                                                       // End ax25crcBit(int lsb_int)
-//#pragma GCC pop_options
 // end of file
