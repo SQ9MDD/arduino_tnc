@@ -568,15 +568,15 @@ inline void MsgHandler(uint8_t data) {
     } else if (0xDC == data)                            // we may have an escape byte
     {
         if (0xDB == prevdata) {
-            ax25sendByte(0xC0);
+            ax25sendByte(0xC0, 0);
         }
     } else if (0xDD == data)                            // we may have an escape byte
     {
         if (0xDB == prevdata) {
-            ax25sendByte(0xDB);
+            ax25sendByte(0xDB, 0);
         }
     } else if (TRUE == transmit) {
-        ax25sendByte(data);                             // if we are transmitting then just send the data
+        ax25sendByte(data, 0);                             // if we are transmitting then just send the data
     }
     prevdata = data;                                    // copy the data for our state machine
     last_serial_processed_time = (uint32_t) millis();
@@ -738,7 +738,7 @@ void ax25sendHeader(void) {
     // Transmit the Flag field to begin the UI-Frame
     // Adjust length for txdelay (each one takes 6.7ms)
     for (loop_delay = 0; loop_delay < TXDELAY; loop_delay++) {
-        (ax25sendByte(0x7E));                           //send the sync header byte
+        (ax25sendByte(0x7E, 1));                           //send the sync header byte
     }
     return;
 }                                                       // End ax25sendHeader(void)
@@ -746,13 +746,13 @@ void ax25sendHeader(void) {
 void ax25sendFooter(void) {
     static uint8_t crchi;
     crchi = (crc >> 8) ^ 0xFF;
-    ax25sendByte(crc ^ 0xFF);                           // Send the low byte of the crc
-    ax25sendByte(crchi);                                // Send the high byte of the crc
-    ax25sendByte(0x7E);                                 // Send a flag to end the packet
+    ax25sendByte(crc ^ 0xFF, 0);                           // Send the low byte of the crc
+    ax25sendByte(crchi, 0);                                // Send the high byte of the crc
+    ax25sendByte(0x7E, 1);                                 // Send a flag to end the packet
     return;
 }                                                       // End ax25sendFooter(void)
 
-void ax25sendByte(uint8_t txbyte) {
+void ax25sendByte(uint8_t txbyte, uint8_t dont_stuff) {
     static uint8_t mloop;
     static uint8_t bitbyte;
     static uint8_t bit_zero;
@@ -761,7 +761,7 @@ void ax25sendByte(uint8_t txbyte) {
     for (mloop = 0; mloop < 8; mloop++)                 // Loop for eight bits in the byte
     {
         bit_zero = bitbyte & 0x01;                      // Set aside the least significant bit
-        if (txbyte == 0x7E)                             // Is the transmit character a flag?
+        if (txbyte == 0x7E && dont_stuff)               // Is the transmit character a flag?
         {
             sequential_ones = 0;                        // it is immune from sequential 1's
         } else                                          // The transmit character is not a flag
